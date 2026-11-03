@@ -19,6 +19,13 @@ const generateSlug = (text: string): string =>
         .replace(/[^a-z0-9]+/g, '-')
         .replace(/^-+|-+$/g, '');
 
+// parse a client-supplied ID: only positive safe integers are valid, otherwise null
+const parseId = (value: unknown): number | null => {
+    if (typeof value !== 'string' || !/^\d+$/.test(value)) return null;
+    const id = Number(value);
+    return Number.isSafeInteger(id) && id > 0 ? id : null;
+};
+
 
 export const getCategories = async (req: Request, res: Response) : Promise<void> => {
     try {
@@ -34,7 +41,11 @@ export const getCategories = async (req: Request, res: Response) : Promise<void>
             }
             targetStoreId = store.id;
         }else if (storeId) {
-            targetStoreId = Number(storeId);
+            targetStoreId = parseId(storeId);
+            if (!targetStoreId) {
+                res.status(400).json({ success: false, message: "storeId must be a positive integer" });
+                return;
+            }
         }
 
         if(!targetStoreId){
@@ -52,7 +63,43 @@ export const getCategories = async (req: Request, res: Response) : Promise<void>
         res.json({ success: true,  categories });
     }catch (error: any) {
         console.error("Error fetching categories:", error);
-        res.status(500).json({ success: false, message: error? error?.message || "Failed to fetch categories"  });
+        res.status(500).json({ success: false, message: "Failed to fetch categories" });
+    }
+}
+
+
+export const createCategory = async (req: AuthenticatedRequest, res: Response) : Promise<void> => {
+    try {
+        const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+        const slug = generateSlug(name);
+        if (!name || !slug) {
+            res.status(400).json({ success: false, message: "Category name is required" });
+            return;
+        }
+
+        const store = await getStore(req.user!.id);
+        if (!store) {
+            res.status(404).json({ success: false, message: "Store not found for the user" });
+            return;
+        }
+
+        const existing = await prisma.categories.findFirst({
+            where: { store_id: store.id, slug },
+            select: { id: true },
+        });
+        if (existing) {
+            res.status(409).json({ success: false, message: "Category already exists" });
+            return;
+        }
+
+        const category = await prisma.categories.create({
+            data: { name, slug, store_id: store.id },
+        });
+        res.status(201).json({ success: true, category });
+
+    } catch (error: any) {
+        console.error("createCategory error:", error);
+        res.status(500).json({ success: false, message: "Failed to create category" });
     }
 }
  
@@ -60,6 +107,12 @@ export const getCategories = async (req: Request, res: Response) : Promise<void>
 export const deleteCategories = async (req: AuthenticatedRequest, res: Response) : Promise<void> => {
 
     try {
+        const categoryId = parseId(req.params.id);
+        if (!categoryId) {
+            res.status(400).json({ success: false, message: "Category id must be a positive integer" });
+            return;
+        }
+
         const store = await getStore(req.user!.id);
         if (!store) {
             res.status(404).json({ success: false, message: "Store not found for the user" });
@@ -67,12 +120,12 @@ export const deleteCategories = async (req: AuthenticatedRequest, res: Response)
         }
 
         await prisma.categories.deleteMany({
-            where: { id: Number(req.params.id), store_id: store.id },
+            where: { id: categoryId, store_id: store.id },
         });
         res.json({ success: true, message: "Category deleted successfully" });
 
     } catch (error: any) {
         console.error("deleteCategories error:", error);
-        res.status(500).json({ success: false, message: error?.message || "Failed to delete categories" });
+        res.status(500).json({ success: false, message: "Failed to delete categories" });
     }
 }
