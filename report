@@ -56,3 +56,13 @@ Without Neon Auth:  You build the whole user system from scratch. It's
     ├── account     加密后的密码
     ├── session     登录状态
     └── verification 验证码
+
+
+Prisma Schema：定义数据库应该长什么样。
+Prisma Migration：把 Schema 的变化应用到数据库。
+Prisma Client：让你的代码能够操作数据库。
+//fastapi里router：@router.get("/categories")和controller：async def get_categories():是写在一起的
+@router.get("/categories")
+async def get_categories():
+    categories = await get_categories_from_db()
+    return {"categories": categories}
