@@ -1,5 +1,5 @@
 import type { Request, Response, NextFunction } from "express";
-import { createRemoteJWKSet, jwtVerify } from "jose";
+import { createRemoteJWKSet, jwtVerify, type JWTPayload } from "jose";
 import { findNeonUser } from "../services/neonUser.js";
 import { prisma } from "../config/prisma.js";
 
@@ -51,45 +51,41 @@ try {
 export const verifyAuthToken = async (token: string): Promise<AuthUser | null> => {
     if (!token || !neonJWKS || !neonIssuer) return null;
 
+    //1. 只把 JWT 验证失败当作"未登录"；数据库错误继续往外抛，由 Express 返回 500
+    let payload: JWTPayload;
     try {
-        //1.
-        const { payload } = await jwtVerify(token, neonJWKS, { issuer: neonIssuer, requiredClaims: ["exp", "sub"] });
-        if (!payload || (!payload.sub && !payload.email)) {
-            return null;
-        }
-
-        const userEmail = String(payload.email || "").toLowerCase();
-        const userId = String(payload.sub || payload.id || "");
-        //2.
-        const u = await findNeonUser({
-            ...(userId ? { id: userId } : {}),
-            ...(userEmail ? { email: userEmail } : {}),
-        });
-
-        const effectiveId = u?.id || userId;
-        const effectiveName = u?.name || String(payload.name || userEmail.split("@")[0]);
-        const effectiveEmail = u?.email || userEmail;
-        //3.use prisma to find the store of the user, if the user is a merchant,
-        // then the store will be found, otherwise it will be null
-        const store = await prisma.stores.findFirst({ where: { merchant_id: effectiveId } });
-        let role: "admin" | "merchant" | "customer" = "customer";
-
-        if (u?.role === "admin" || payload.role === "admin") {
-            role = "admin";
-        } else if (store || u?.role === "merchant" || payload.role === "merchant") {
-            role = "merchant";
-        }
-
-        return {
-            id: effectiveId,
-            name: effectiveName,
-            email: effectiveEmail,
-            role,
-            storeId: role === "admin" || !store ? null : String(store.id),
-        };
+        ({ payload } = await jwtVerify(token, neonJWKS, { issuer: neonIssuer, requiredClaims: ["exp", "sub"] }));
     } catch (error) {
         return null;
     }
+
+    const userEmail = String(payload.email || "").toLowerCase();
+    const userId = String(payload.sub || "");
+    //2. 用户必须存在于 neon_auth.user，身份信息以数据库为准
+    const u = await findNeonUser({
+        ...(userId ? { id: userId } : {}),
+        ...(userEmail ? { email: userEmail } : {}),
+    });
+    if (!u) return null;
+
+    //3.use prisma to find the store of the user, if the user is a merchant,
+    // then the store will be found, otherwise it will be null
+    const store = await prisma.stores.findFirst({ where: { merchant_id: u.id } });
+    let role: "admin" | "merchant" | "customer" = "customer";
+
+    if (u.role === "admin" || payload.role === "admin") {
+        role = "admin";
+    } else if (store || u.role === "merchant" || payload.role === "merchant") {
+        role = "merchant";
+    }
+
+    return {
+        id: u.id,
+        name: u.name || u.email.split("@")[0],
+        email: u.email,
+        role,
+        storeId: role === "admin" || !store ? null : String(store.id),
+    };
 };
 
 //why use optional and required at the same time:

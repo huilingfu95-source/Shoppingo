@@ -13,29 +13,25 @@ export interface NeonUserRecord {
 //we only need to implement find user function, and we can use the find user function to check
 // if the user exists in our database
 // neon_auth.user is managed by Neon Auth, not by schema.prisma, so we query it with raw SQL
+// 查询出错时直接抛出，不要当成"用户不存在"
 export const findNeonUser = async (filter: { id?: string; email?: string }): Promise<NeonUserRecord | null> => {
-    try {
-        let rows: NeonUserRecord[] = [];
+    let rows: NeonUserRecord[] = [];
 
-        if (filter.id) {
-            rows = await prisma.$queryRaw<NeonUserRecord[]>`
-                SELECT id, name, email, role, "createdAt"
-                FROM neon_auth.user
-                WHERE id = ${filter.id}::uuid
-                LIMIT 1
-            `;
-        } else if (filter.email) {
-            rows = await prisma.$queryRaw<NeonUserRecord[]>`
-                SELECT id, name, email, role, "createdAt"
-                FROM neon_auth.user
-                WHERE LOWER(email) = ${filter.email.trim().toLowerCase()}
-                LIMIT 1
-            `;
-        }
-
-        return rows[0] || null;
-    } catch (error) {
-        console.error("findNeonUser failed:", error);
-        return null;
+    if (filter.id) {
+        rows = await prisma.$queryRaw<NeonUserRecord[]>`
+            SELECT id, name, email, role, "createdAt"
+            FROM neon_auth.user
+            WHERE id = ${filter.id}::uuid
+            LIMIT 1
+        `;
+    } else if (filter.email) {
+        rows = await prisma.$queryRaw<NeonUserRecord[]>`
+            SELECT id, name, email, role, "createdAt"
+            FROM neon_auth.user
+            WHERE LOWER(email) = ${filter.email.trim().toLowerCase()}
+            LIMIT 1
+        `;
     }
+
+    return rows[0] || null;
 };
