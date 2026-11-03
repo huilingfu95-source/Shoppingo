@@ -1,2 +1,8 @@
 node_modules
-.evn
+.env
+/generated/prisma
+.agents
+.claude
+.windsurf
+.env.*
+!.env.example
