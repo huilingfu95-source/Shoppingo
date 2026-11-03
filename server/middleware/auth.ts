@@ -53,7 +53,7 @@ export const verifyAuthToken = async (token: string): Promise<AuthUser | null> =
 
     try {
         //1.
-        const { payload } = await jwtVerify(token, neonJWKS, { issuer: neonIssuer });
+        const { payload } = await jwtVerify(token, neonJWKS, { issuer: neonIssuer, requiredClaims: ["exp", "sub"] });
         if (!payload || (!payload.sub && !payload.email)) {
             return null;
         }
@@ -74,7 +74,7 @@ export const verifyAuthToken = async (token: string): Promise<AuthUser | null> =
         const store = await prisma.stores.findFirst({ where: { merchant_id: effectiveId } });
         let role: "admin" | "merchant" | "customer" = "customer";
 
-        if (u?.role === "admin" || payload.role === "admin" || effectiveEmail.includes("admin@")) {
+        if (u?.role === "admin" || payload.role === "admin") {
             role = "admin";
         } else if (store || u?.role === "merchant" || payload.role === "merchant") {
             role = "merchant";
@@ -85,11 +85,13 @@ export const verifyAuthToken = async (token: string): Promise<AuthUser | null> =
             name: effectiveName,
             email: effectiveEmail,
             role,
-            store_id: role === "admin" ? null : store?.id || null,
+            storeId: role === "admin" || !store ? null : String(store.id),
         };
     } catch (error) {
         return null;
     }
+};
+
 //why use optional and required at the same time:
 //buz not all apis need to be authenticated, 
 // some apis can be accessed without authentication, so we need to use optional and required at the same time
@@ -131,7 +133,7 @@ export const optionalAuth = async (req: AuthenticatedRequest, res: Response, nex
 };
 
 //Authorization 
-export const requireRole = async(roles: Array<"admin" | "merchant" | "customer">) => {
+export const requireRole = (roles: Array<"admin" | "merchant" | "customer">) => {
     return (
         req: AuthenticatedRequest,
         res: Response,
