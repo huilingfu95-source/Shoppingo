@@ -1,10 +1,34 @@
 import { Request, Response } from "express";
+import { randomUUID } from "node:crypto";
 import cloudinaryConfig from "../config/cloudinary.js";
 
 const { cloudinary } = cloudinaryConfig;
 
 type TransformAction = "recolor" | "bg-removal";
 const TRANSFORM_ACTIONS: TransformAction[] = ["recolor", "bg-removal"];
+
+// 允许让 Cloudinary 远程拉取的图片域名（除了自己的 Cloudinary 之外）
+const ALLOWED_REMOTE_IMAGE_HOSTS = new Set(["images.unsplash.com"]);
+
+const isOwnCloudinaryUrl = (url: string): boolean => {
+    const cloudName = cloudinary.config().cloud_name;
+    return !!cloudName && url.startsWith(`https://res.cloudinary.com/${cloudName}/`);
+};
+
+// 只接受 HTTPS + 白名单域名（或自己的 Cloudinary）的图片 URL
+const isAllowedImageUrl = (value: unknown): value is string => {
+    if (typeof value !== "string") return false;
+    if (isOwnCloudinaryUrl(value)) return true;
+    try {
+        const parsed = new URL(value);
+        return (
+            parsed.protocol === "https:" &&
+            ALLOWED_REMOTE_IMAGE_HOSTS.has(parsed.hostname.toLowerCase())
+        );
+    } catch {
+        return false;
+    }
+};
 
 const sanitizeColor = (color?: string): string => {
     const value = (color || "red").replace(/^#/, "");
@@ -84,10 +108,6 @@ export const uploadToCloudinary = (
     });
 };
 
-// 如果 Cloudinary 上传失败，不直接报错，而是把图片 Buffer 转换成 Base64 Data URL
-const toDataUrl = (file: Express.Multer.File): string =>
-    `data:${file.mimetype};base64,${file.buffer.toString("base64")}`;
-
 // Upload single image
 export const uploadSingle = async (req: Request, res: Response): Promise<void> => {
     try {
@@ -100,7 +120,7 @@ export const uploadSingle = async (req: Request, res: Response): Promise<void> =
         const url = await uploadToCloudinary(file.buffer, "shoppingo", {
             mimetype: file.mimetype,
             filename: file.originalname,
-        }).catch(() => toDataUrl(file));
+        });
 
         // return url to frontend
         res.json({ success: true, url });
@@ -125,7 +145,7 @@ export const uploadMultiple = async (req: Request, res: Response): Promise<void>
                 uploadToCloudinary(file.buffer, "shoppingo", {
                     mimetype: file.mimetype,
                     filename: file.originalname,
-                }).catch(() => toDataUrl(file)),
+                }),
             ),
         );
 
@@ -158,14 +178,15 @@ export const aiTransform = async (req: Request, res: Response): Promise<void> =>
         // https://res.cloudinary.com/myshop/image/upload/photo.jpg
         //                            ↑
         //                        cloud_name
-        const cloudName = cloudinary.config().cloud_name;
+        if (!isAllowedImageUrl(imageUrl)) {
+            res.status(400).json({ success: false, message: "Image URL host is not allowed" });
+            return;
+        }
+
         let baseCloudinaryUrl: string = imageUrl;
 
         // ① 检查图片是不是在自己的 Cloudinary（用 startsWith，避免 URL 中间夹带字符串绕过检查）
-        const isOwnCloudinary =
-            !!cloudName && imageUrl.startsWith(`https://res.cloudinary.com/${cloudName}/`);
-
-        if (!isOwnCloudinary) {
+        if (!isOwnCloudinaryUrl(imageUrl)) {
             // ② 上传图片
             const uploadResult = await cloudinary.uploader.upload(imageUrl, {
                 folder: "shoppingo/products",
@@ -198,10 +219,13 @@ const ensureCloudinaryUrl = async (
     url: string,
     folder = "shoppingo/tryon"//如果需要上传图片，希望把它存放在哪个文件夹
 ): Promise<string> => {
-    const cloudName = cloudinary.config().cloud_name;
     //yes,return the rul
-    if (cloudName && url.startsWith(`https://res.cloudinary.com/${cloudName}/`)) {
+    if (isOwnCloudinaryUrl(url)) {
         return url;
+    }
+    // 不在白名单里的 URL 不允许上传，也不允许原样返回
+    if (!isAllowedImageUrl(url)) {
+        throw new Error("Image URL host is not allowed");
     }
     //no,upload the photo
     const res = await cloudinary.uploader.upload(url, {
@@ -221,7 +245,6 @@ export interface GenerateOnModelParams {
     prompt: string;
     productImageUrl: string;
     modelImageUrl: string;
-    targetPublicId?: string;
     preference?: string;
 }
 
@@ -257,9 +280,8 @@ export const generateOnModelImage = async (
         throw new Error("Cloudinary instance credentials are not configured");
     }
 
-    const targetPublicId =
-        params.targetPublicId?.trim() ||
-        `tryOn/model_${Date.now()}`;
+    // public_id 只在服务器端随机生成，客户端不能指定（避免覆盖已有图片）
+    const targetPublicId = `tryOn/model_${randomUUID()}`;
     //3.payload 就是你准备发送给 Cloudinary AI API 的请求内容。
     const payload = {
         prompt: params.prompt,
@@ -286,6 +308,8 @@ export const generateOnModelImage = async (
                 "Content-Type": "application/json",
             },
             body: JSON.stringify(payload),
+            // 最多等 60 秒，避免 Cloudinary 卡住时请求一直挂起
+            signal: AbortSignal.timeout(60_000),
         }
     );
 
@@ -337,9 +361,13 @@ export const generateOnModelImage = async (
 export const onModelCatalog = async (req: Request, res: Response): Promise<void> => {
     try {
         const {productImageUrl, modelImageUrl,garmentType,pose,background
-            ,customPrompt,preference,targetPublicId} = req.body ?? {};
+            ,customPrompt,preference} = req.body ?? {};
         if(!productImageUrl){
             res.status(400).json({ success: false, message: "productImageUrl is required" });
+            return;
+        }
+        if (!isAllowedImageUrl(productImageUrl) || (modelImageUrl && !isAllowedImageUrl(modelImageUrl))) {
+            res.status(400).json({ success: false, message: "Image URL host is not allowed" });
             return;
         }
         const defaultModel = "https://images.unsplash.com/photo-1728476028122-b3992eca9164?w=900&auto=format&fit=crop&q=60&ixlib=rb-4.1.0&ixid=NHwxMjA3fDA%3D";
@@ -362,7 +390,6 @@ export const onModelCatalog = async (req: Request, res: Response): Promise<void>
                 prompt,
                 modelImageUrl:modelUrl,
                 productImageUrl: productUrl,
-                targetPublicId,
                 preference,
             })
 
