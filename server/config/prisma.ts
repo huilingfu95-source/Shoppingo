@@ -1,7 +1,9 @@
 import "dotenv/config";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../generated/prisma/client.js";
+// PrismaPg 是 Prisma 的 PostgreSQL Driver Adapter。
 
+// 它的作用是让 Prisma Client 使用 PostgreSQL 驱动程序与数据库通信。
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString) {
     throw new Error("DATABASE_URL is not set");

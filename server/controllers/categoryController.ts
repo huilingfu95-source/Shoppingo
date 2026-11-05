@@ -129,3 +129,26 @@ export const deleteCategories = async (req: AuthenticatedRequest, res: Response)
         res.status(500).json({ success: false, message: "Failed to delete categories" });
     }
 }
+
+// CATEGORY CONTROLLER
+// │
+// ├── GET: getCategories()
+// │   ├── Receive storeId or storeSlug
+// │   ├── Find target store ID
+// │   ├── prisma.categories.findMany()
+// │   └── Return categories + productCount
+// │
+// ├── POST: createCategory()
+// │   ├── Receive category name
+// │   ├── Generate slug and validate
+// │   ├── Find authenticated merchant's store
+// │   ├── Check for duplicate category
+// │   ├── prisma.categories.create()
+// │   └── Return 201 + new category
+// │
+// └── DELETE: deleteCategories()
+//     ├── Receive category ID
+//     ├── Validate ID using parseId()
+//     ├── Find authenticated merchant's store
+//     ├── prisma.categories.deleteMany()
+//     └── Return success message
