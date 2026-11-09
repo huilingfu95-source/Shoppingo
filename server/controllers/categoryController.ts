@@ -67,7 +67,7 @@ export const getCategories = async (req: Request, res: Response) : Promise<void>
     }
 }
 
-
+//Merchant 登录 → 找到自己的 Store → 创建 Category → Category 属于这个 Store。
 export const createCategory = async (req: AuthenticatedRequest, res: Response) : Promise<void> => {
     try {
         const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
