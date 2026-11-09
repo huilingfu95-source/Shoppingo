@@ -24,6 +24,7 @@ app.use(express.json());
 app.use(express.urlencoded());
 
 app.use('/api/categories', categoryRouter);
+app.use("/api/upload",uploadRouter)
 
 app.listen(port, () => {
     console.log(`Server is running at http://localhost:${port}`);
