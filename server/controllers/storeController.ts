@@ -1,7 +1,7 @@
 import { Request, Response } from "express";
 import { AuthenticatedRequest } from "../middleware/auth.js";
 import { prisma } from "../config/prisma.js";
-import { updateNeonUserRole, findNeonMerchants } from "../services/neonUser.js";
+import { updateNeonUserRole } from "../services/neonUser.js";
 
 // generate slug: "My Cool Shop" -> "my-cool-shop"
 const generateSlug = (text: string): string =>
@@ -21,6 +21,32 @@ const optionalString = (value: unknown, maxLength = 2000): string | undefined | 
     return trimmed.length <= maxLength ? trimmed : null;
 };
 
+// slugs that collide with fixed GET routes in storeRoutes.ts (GET /me is matched before GET /:slug)
+const RESERVED_SLUGS = new Set(["me"]);
+
+// normalized slug, or null if empty / longer than 255 / reserved
+const validateSlug = (value: unknown): string | null => {
+    const slug = typeof value === "string" ? generateSlug(value) : "";
+    return slug && slug.length <= 255 && !RESERVED_SLUGS.has(slug) ? slug : null;
+};
+
+// hex color "#RGB" / "#RRGGBB": undefined if missing/empty, null if invalid
+const optionalColor = (value: unknown): string | undefined | null => {
+    if (value === undefined || value === null || value === "") return undefined;
+    if (typeof value !== "string") return null;
+    const color = value.trim();
+    if (!color) return undefined;
+    return /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(color) ? color : null;
+};
+
+// 3-letter currency code ("usd" -> "USD"): undefined if missing/empty, null if invalid
+const optionalCurrency = (value: unknown): string | undefined | null => {
+    if (value === undefined || value === null || value === "") return undefined;
+    if (typeof value !== "string") return null;
+    const code = value.trim().toUpperCase();
+    return /^[A-Z]{3}$/.test(code) ? code : null;
+};
+
 // create a new store (for authenticated merchant)
 // Merchant 登录 → 检查是否已有 Store（一个 merchant 只能有一个）→ 生成 slug → 创建 Store
 export const createStore = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
@@ -34,7 +60,7 @@ export const createStore = async (req: AuthenticatedRequest, res: Response): Pro
         }
         // platform admin accounts cannot create stores
         if (role === "admin") {
-            res.status(403).json({ success: false, message: "Forbbiden: Platform admin accounts cannot create stores" });
+            res.status(403).json({ success: false, message: "Forbidden: Platform admin accounts cannot create stores" });
             return;
         }
         // one store per merchant: check before validating the body
@@ -51,17 +77,40 @@ export const createStore = async (req: AuthenticatedRequest, res: Response): Pro
             return;
         }
 
-        const {name,slug,description,logo_url,banner_url,currency="USD",shipping_fee=0,free_shipping_threshold=0,
-            hero_style="hero1",accent_color="#059669"} = req.body;
+        const body = req.body ?? {};
 
+        // name: required non-empty string, max 255
+        const name = typeof body.name === "string" ? body.name.trim() : "";
         if (!name || name.length > 255) {
             res.status(400).json({ success: false, message: "Store name is required (max 255 characters)" });
             return;
         }
 
+        // optional fields: undefined = use default, null = invalid
+        const fields = {
+            description: optionalString(body.description),
+            logo_url: optionalString(body.logo_url),
+            banner_url: optionalString(body.banner_url),
+            currency: optionalCurrency(body.currency),
+            shipping_fee: optionalAmount(body.shipping_fee),
+            free_shipping_threshold: optionalAmount(body.free_shipping_threshold),
+            accent_color: optionalColor(body.accent_color),
+        };
+        const hero_style = body.hero_style === undefined || body.hero_style === "" ? "hero1" : body.hero_style;
+        const invalidFields = Object.entries(fields).filter(([, v]) => v === null).map(([k]) => k);
+        if (!VALID_HEROES.includes(hero_style)) invalidFields.push("hero_style");
+        if (invalidFields.length) {
+            res.status(400).json({ success: false, message: `Invalid fields: ${invalidFields.join(", ")}` });
+            return;
+        }
+
         // allow a custom slug, otherwise derive it from the name
-        const rawSlug = typeof req.body?.slug === "string" && req.body.slug.trim() ? req.body.slug : name;
-        const finalSlug = generateSlug(rawSlug);
+        const hasCustomSlug = typeof body.slug === "string" && body.slug.trim();
+        const finalSlug = validateSlug(hasCustomSlug ? body.slug : name);
+        if (!finalSlug) {
+            res.status(400).json({ success: false, message: "Invalid fields: slug" });
+            return;
+        }
 
          //check if slug is taken
         const slugTaken = await prisma.stores.findUnique({ where: { slug: finalSlug }, select: { id: true } });
@@ -73,17 +122,17 @@ export const createStore = async (req: AuthenticatedRequest, res: Response): Pro
         const newStore = await prisma.stores.create({
             data: {
                 merchant_id: merchantId,
-                name: name.trim(),
+                name,
                 slug:finalSlug,
-                description: description || "",
-                logo_url: logo_url  || "",
-                banner_url: banner_url || "",
-                currency,
+                description: fields.description ?? "",
+                logo_url: fields.logo_url ?? "",
+                banner_url: fields.banner_url ?? "",
+                currency: fields.currency ?? "USD",
                 status: "active",
-                shipping_fee: Number(shipping_fee) || 0,
-                free_shipping_threshold: Number(free_shipping_threshold) || 0,
+                shipping_fee: fields.shipping_fee ?? 0,
+                free_shipping_threshold: fields.free_shipping_threshold ?? 0,
                 hero_style,
-                accent_color:accent_color?.trim() || "#059669",
+                accent_color: fields.accent_color ?? "#059669",
                 
             }
         })
@@ -98,6 +147,14 @@ export const createStore = async (req: AuthenticatedRequest, res: Response): Pro
     })
 
     } catch (error: any) {
+        // unique constraint hit by a concurrent request: stores.merchant_id or stores.slug
+        if (error?.code === "P2002") {
+            const message = JSON.stringify(error.meta ?? {}).includes("merchant_id")
+                ? "You already have a store"
+                : "Store slug is already taken";
+            res.status(409).json({ success: false, message });
+            return;
+        }
         console.error("createStore:",error);
         res.status(500).json({success: false, message: "Failed to create store"})
 
@@ -250,20 +307,38 @@ export const updateStoreSettings = async (req: AuthenticatedRequest, res: Respon
             shipping_fee, free_shipping_threshold, hero_style, accent_color,
         } = req.body ?? {};
 
+        // text fields: only the ones sent are validated; "" clears an optional field, name/currency cannot be blank
+        const rawText = { name, description, logo_url, banner_url, currency };
+        const text = {
+            name: optionalString(name, 255),
+            description: optionalString(description),
+            logo_url: optionalString(logo_url),
+            banner_url: optionalString(banner_url),
+            currency: optionalCurrency(currency),
+        };
+        const invalidFields = Object.entries(text).filter(([, v]) => v === null).map(([k]) => k);
+        if (name !== undefined && text.name === undefined) invalidFields.push("name");
+        if (currency !== undefined && text.currency === undefined) invalidFields.push("currency");
+        if (hero_style !== undefined && !VALID_HEROES.includes(hero_style)) invalidFields.push("hero_style");
+        const color = optionalColor(accent_color);
+        if (color === null) invalidFields.push("accent_color");
+
         // money fields must be non-negative numbers, otherwise Number() gives NaN and Prisma throws
-        const invalidAmounts = Object.entries({ shipping_fee, free_shipping_threshold })
-            .filter(([, v]) => v !== undefined && optionalAmount(v) === null)
-            .map(([k]) => k);
-        if (invalidAmounts.length) {
-            res.status(400).json({ success: false, message: `Invalid fields: ${invalidAmounts.join(", ")}` });
+        invalidFields.push(
+            ...Object.entries({ shipping_fee, free_shipping_threshold })
+                .filter(([, v]) => v !== undefined && optionalAmount(v) === null)
+                .map(([k]) => k),
+        );
+        if (invalidFields.length) {
+            res.status(400).json({ success: false, message: `Invalid fields: ${invalidFields.join(", ")}` });
             return;
         }
 
         // slug (must stay unique); only update when it actually changes
         let newSlug: string | undefined;
         if (slug !== undefined) {
-            newSlug = typeof slug === "string" ? generateSlug(slug) : "";
-            if (!newSlug || newSlug.length > 255) {
+            newSlug = validateSlug(slug) ?? undefined;
+            if (!newSlug) {
                 res.status(400).json({ success: false, message: "Invalid fields: slug" });
                 return;
             }
@@ -282,18 +357,18 @@ export const updateStoreSettings = async (req: AuthenticatedRequest, res: Respon
             where: { id: store.id },
             data: {
                 ...Object.fromEntries(
-                    Object.entries({ name, description, logo_url, banner_url, currency }).
-                        filter(([, v]) => v !== undefined),
+                    (Object.keys(text) as Array<keyof typeof text>)
+                        .filter((k) => rawText[k] !== undefined)
+                        .map((k) => [k, text[k] ?? ""]),
                 ),
                 ...(newSlug && { slug: newSlug }),
                 ...(shipping_fee !== undefined && { shipping_fee: Number(shipping_fee) }),
                 ...(free_shipping_threshold !== undefined && {
                     free_shipping_threshold: Number(free_shipping_threshold)
                 }),
-                ...(hero_style && VALID_HEROES.includes(hero_style) && { hero_style }),
-                ...(accent_color !== undefined && {
-                    accent_color: String(accent_color).trim() || "#059669"
-                }),
+                ...(hero_style !== undefined && { hero_style }),
+                // "" resets accent_color to the default
+                ...(accent_color !== undefined && { accent_color: color ?? "#059669" }),
             }
         })
         res.json({ success: true, store: updated });
@@ -315,8 +390,9 @@ export const getAllStores = async (req: AuthenticatedRequest, res: Response): Pr
     try {
         const [stores, revenueRows] = await Promise.all([
             prisma.stores.findMany({
-                include: { _count: { select: { products: true, orders: true, categories: true } } },
-                orderBy: { created_at: "desc" },
+                include: { 
+                    _count: { select: { products: true, orders: true, categories: true } } },
+                    orderBy: { created_at: "desc" },
             }),
             prisma.orders.groupBy({
                 by: ["store_id"],
@@ -347,10 +423,18 @@ export const getAllStores = async (req: AuthenticatedRequest, res: Response): Pr
 };
 
 // ADMIN: get all merchants (role = merchant, or anyone who owns a store) with their store
-// neon_auth.user 的 raw SQL 在 services/neonUser.ts (findNeonMerchants)
+// neon_auth.user 不在 schema.prisma 里，所以用 raw SQL
 export const getAllMerchants = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
-        const merchants = await findNeonMerchants();
+        const merchants = await prisma.$queryRaw<
+            Array<{ id: string; name: string | null; email: string; role: string | null; createdAt: Date | null }>
+        >`
+            SELECT u.id, u.name, u.email, u.role, u."createdAt"
+            FROM neon_auth.user u
+            WHERE u.role = 'merchant'
+               OR EXISTS (SELECT 1 FROM public.stores s WHERE s.merchant_id = u.id)
+            ORDER BY u."createdAt" DESC
+        `;
 
         const stores = await prisma.stores.findMany({
             where: { merchant_id: { in: merchants.map((m) => m.id) } },
@@ -370,8 +454,8 @@ export const getAllMerchants = async (req: AuthenticatedRequest, res: Response):
     }
 };
 
-// ADMIN: toggle store status active <-> suspended
-// suspended 的店铺在 getStoreBySlug（storefront）里返回 404
+// ADMIN: toggle store status active <-> inactive
+// inactive 的店铺在 getStoreBySlug（storefront）里返回 404
 export const toggleStoreStatus = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
         const storeId = parseId(req.params.id);
@@ -386,7 +470,7 @@ export const toggleStoreStatus = async (req: AuthenticatedRequest, res: Response
             return;
         }
 
-        const status = store.status === "active" ? "suspended" : "active";
+        const status = store.status === "active" ? "inactive" : "active";
         const updated = await prisma.stores.update({
             where: { id: storeId },
             data: { status },
@@ -403,38 +487,28 @@ export const toggleStoreStatus = async (req: AuthenticatedRequest, res: Response
 // STORE CONTROLLER
 // │
 // ├── POST: onboardMerchant()
-// │   ├── No user → 401; admin → 403 (admin cannot become merchant)
-// │   ├── Already merchant → return success + store (idempotent)
-// │   ├── updateNeonUserRole(id, "merchant") → 0 rows affected → 404
-// │   └── Return role + store (usually null → frontend goes to create store)
+// │   ├── Already merchant/admin → return as-is
+// │   └── UPDATE neon_auth.user SET role = 'merchant'
 // │
 // ├── POST: createStore()
-// │   ├── merchantId from req.user (verified JWT), admin → 403
-// │   ├── One store per merchant → 400 + existing store
-// │   ├── Validate name (required, max 255)
-// │   ├── slug = custom slug or name → generateSlug(); taken → 409
-// │   ├── prisma.stores.create() with defaults (USD, hero1, #059669, status active)
-// │   ├── updateNeonUserRole(id, "merchant")
+// │   ├── Require merchant role
+// │   ├── Validate name / slug / optional fields
+// │   ├── One store per merchant, slug must be unique
+// │   ├── prisma.stores.create()
 // │   └── Return 201 + new store
 // │
 // ├── GET: getMyStore()
-// │   ├── admin → 403
-// │   └── Find store by merchant_id = req.user.id → 404 if none
+// │   └── Find store by merchant_id = req.user.id
 // │
-// ├── GET: getStoreBySlug()  (public)
-// │   └── Storefront lookup: active stores only, merchant_id omitted → 404 otherwise
+// ├── GET: getStoreBySlug()
+// │   └── Public storefront lookup (active stores only, merchant_id hidden)
 // │
 // ├── PUT: updateStoreSettings()
-// │   ├── admin → 403; find merchant's store → 404 if none
-// │   ├── Only update fields sent in body (status is admin-only)
-// │   ├── shipping_fee / free_shipping_threshold: non-negative amount → else 400
-// │   ├── slug: generateSlug(), skip if unchanged, taken → 409 (P2002 → 409 as fallback)
-// │   ├── hero_style only if in VALID_HEROES; empty accent_color → #059669
+// │   ├── Find merchant's store
+// │   ├── Validate only the fields sent (status is admin-only)
 // │   └── prisma.stores.update()
 // │
 // └── ADMIN
-//     ├── GET: getAllStores()      → stores + productCount / orderCount / categoryCount
-//     │                              + revenue (sum of non-cancelled order totals)
-//     ├── GET: getAllMerchants()   → findNeonMerchants() (service: role = merchant or store owner)
-//     │                              + their store (id / name / slug / status)
-//     └── PATCH: toggleStoreStatus() → parseId → 400; not found → 404; active <-> suspended
+//     ├── GET: getAllStores()      → stores + productCount / orderCount / categoryCount / revenue
+//     ├── GET: getAllMerchants()   → neon_auth.user (merchant or store owner) + their store
+//     └── PATCH: toggleStoreStatus() → active <-> inactive
