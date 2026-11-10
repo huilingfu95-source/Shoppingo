@@ -72,3 +72,14 @@ export const findNeonMerchants = async (): Promise<NeonUserRecord[]> => {
         ORDER BY u."createdAt" DESC
     `;
 };
+
+// ADMIN: count merchants (same definition as findNeonMerchants)
+export const countNeonMerchants = async (): Promise<number> => {
+    const [row] = await prisma.$queryRaw<{ total: number }[]>`
+        SELECT COUNT(*)::int AS total
+        FROM neon_auth.user u
+        WHERE u.role = 'merchant'
+           OR EXISTS (SELECT 1 FROM public.stores s WHERE s.merchant_id = u.id)
+    `;
+    return row?.total ?? 0;
+};
