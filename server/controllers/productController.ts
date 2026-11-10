@@ -12,6 +12,26 @@ const parseId = (value: unknown): number | null => {
     return Number.isSafeInteger(id) && id > 0 ? id : null;
 };
 
+// allowed product statuses (same set as stores: orders only accept "active" products)
+const PRODUCT_STATUSES = ["active", "inactive"] as const;
+
+// money: finite, non-negative number or numeric string, otherwise null
+const parseMoney = (value: unknown): number | null => {
+    const n = typeof value === "number" ? value : typeof value === "string" && value.trim() !== "" ? Number(value) : NaN;
+    return Number.isFinite(n) && n >= 0 ? n : null;
+};
+
+// stock: non-negative safe integer (number or digit string), otherwise null
+const parseStock = (value: unknown): number | null => {
+    const n = typeof value === "number" ? value : typeof value === "string" && /^\d+$/.test(value) ? Number(value) : NaN;
+    return Number.isSafeInteger(n) && n >= 0 ? n : null;
+};
+
+const isStatus = (value: unknown): value is (typeof PRODUCT_STATUSES)[number] =>
+    typeof value === "string" && (PRODUCT_STATUSES as readonly string[]).includes(value);
+
+const isOptionalString = (value: unknown) => value === undefined || value === null || typeof value === "string";
+
 // POST: create a product in the authenticated merchant's store
 export const createProduct = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
@@ -34,24 +54,45 @@ export const createProduct = async (req: AuthenticatedRequest, res: Response): P
             status = "active",
         } = req.body;
 
-        if (typeof name !== "string" || !name.trim() || price === undefined) {
+        if (typeof name !== "string" || !name.trim() || price === undefined || price === null) {
             res.status(400).json({ success: false, message: "Product name and price are required" });
+            return;
+        }
+
+        // optional fields keep their old behavior: falsy compare_at_price / category_id → null
+        const priceValue = parseMoney(price);
+        const compareValue = compare_at_price ? parseMoney(compare_at_price) : null;
+        const categoryValue = category_id ? parseId(category_id) : null;
+        const stockValue = parseStock(stock);
+        const statusValue = status || "active";
+
+        const error =
+            priceValue === null ? "price must be a non-negative number"
+            : compare_at_price && compareValue === null ? "compare_at_price must be a non-negative number"
+            : category_id && categoryValue === null ? "category_id must be a positive integer"
+            : stockValue === null ? "stock must be a non-negative integer"
+            : !isOptionalString(description) ? "description must be a string"
+            : !isOptionalString(sku) ? "sku must be a string"
+            : !isStatus(statusValue) ? `status must be one of: ${PRODUCT_STATUSES.join(", ")}`
+            : null;
+        if (error) {
+            res.status(400).json({ success: false, message: error });
             return;
         }
 
         const product = await prisma.products.create({
             data: {
                 store_id: store.id,
-                category_id: category_id ? Number(category_id) : null,
+                category_id: categoryValue,
                 name: name.trim(),
                 description: description || "",
-                price: Number(price),
-                compare_at_price: compare_at_price ? Number(compare_at_price) : null,
+                price: priceValue!,
+                compare_at_price: compareValue,
                 sku: sku?.trim() || null,
-                stock: Number(stock) || 0,
+                stock: stockValue!,
                 images: Array.isArray(images) ? images : [],
                 variants: Array.isArray(variants) ? variants : [],
-                status: status || "active",
+                status: statusValue,
             },
         });
         res.status(201).json({ success: true, message: "Product created successfully", product });
@@ -76,34 +117,53 @@ export const updateProduct = async (req: AuthenticatedRequest, res: Response): P
             return;
         }
 
-        // store_id in where: a merchant can only update products in their own store
-        const existing = await prisma.products.findFirst({ where: { id, store_id: store.id }, select: { id: true } });
-        if (!existing) {
-            res.status(404).json({ success: false, message: "Product not found or access denied" });
-            return;
-        }
-
         // no defaults here: a field left out of the body must stay unchanged
         const { name, description, price, compare_at_price, sku, stock, category_id, images, variants, status } = req.body;
 
-        const updated = await prisma.products.update({
-            where: { id },
+        const priceValue = price !== undefined ? parseMoney(price) : undefined;
+        const compareValue = compare_at_price !== undefined ? (compare_at_price ? parseMoney(compare_at_price) : null) : undefined;
+        const stockValue = stock !== undefined ? parseStock(stock) : undefined;
+        const categoryValue = category_id !== undefined ? (category_id ? parseId(category_id) : null) : undefined;
+
+        const error =
+            name !== undefined && (typeof name !== "string" || !name.trim()) ? "name must be a non-empty string"
+            : priceValue === null ? "price must be a non-negative number"
+            : compare_at_price && compareValue === null ? "compare_at_price must be a non-negative number"
+            : stockValue === null ? "stock must be a non-negative integer"
+            : category_id && categoryValue === null ? "category_id must be a positive integer"
+            : !isOptionalString(description) ? "description must be a string"
+            : !isOptionalString(sku) ? "sku must be a string"
+            : status !== undefined && !isStatus(status) ? `status must be one of: ${PRODUCT_STATUSES.join(", ")}`
+            : null;
+        if (error) {
+            res.status(400).json({ success: false, message: error });
+            return;
+        }
+
+        // store_id in where: a merchant can only update products in their own store
+        const { count } = await prisma.products.updateMany({
+            where: { id, store_id: store.id },
             data: Object.fromEntries(
                 Object.entries({
                     name: typeof name === "string" ? name.trim() : undefined,
                     description,
-                    price: price !== undefined ? Number(price) : undefined,
-                    compare_at_price: compare_at_price !== undefined ? (compare_at_price ? Number(compare_at_price) : null) : undefined,
-                    sku,
-                    stock: stock !== undefined ? Number(stock) : undefined,
-                    category_id: category_id !== undefined ? (category_id ? Number(category_id) : null) : undefined,
+                    price: priceValue,
+                    compare_at_price: compareValue,
+                    sku: typeof sku === "string" ? sku.trim() || null : sku,
+                    stock: stockValue,
+                    category_id: categoryValue,
                     images: images !== undefined ? (Array.isArray(images) ? images : []) : undefined,
                     variants: variants !== undefined ? (Array.isArray(variants) ? variants : []) : undefined,
                     status,
                 }).filter(([, v]) => v !== undefined),
             ),
         });
+        if (count === 0) {
+            res.status(404).json({ success: false, message: "Product not found or access denied" });
+            return;
+        }
 
+        const updated = await prisma.products.findUnique({ where: { id } });
         res.json({ success: true, message: "Product updated successfully", product: updated });
     } catch (error: any) {
         console.error("updateProduct error:", error);
@@ -116,7 +176,7 @@ export const updateProduct = async (req: AuthenticatedRequest, res: Response): P
 export const deleteProduct = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
         const productId = parseId(req.params.id);
-        if (!productId) {
+        if (productId === null) {
             res.status(400).json({ success: false, message: "Product id must be a positive integer" });
             return;
         }
@@ -144,14 +204,14 @@ export const deleteProduct = async (req: AuthenticatedRequest, res: Response): P
 // │
 // ├── POST: createProduct()
 // │   ├── Find merchant's store → 404 if none
-// │   ├── name + price required → 400
+// │   ├── name + price required; price/stock/compare_at_price/category_id/status validated → 400
 // │   ├── prisma.products.create() with store_id from the store (never from body)
 // │   └── Return 201 + new product
 // │
 // ├── PUT: updateProduct()
-// │   ├── parseId → 400; product not in merchant's store → 404
+// │   ├── parseId → 400; invalid field types/values → 400
 // │   ├── only fields sent in body are updated; category_id null removes category
-// │   └── prisma.products.update()
+// │   └── prisma.products.updateMany({ id, store_id }) → count 0 → 404
 // │
 // └── DELETE: deleteProduct()
 //     ├── parseId → 400
