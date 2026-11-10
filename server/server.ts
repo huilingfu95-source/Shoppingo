@@ -3,6 +3,7 @@ import express, { Request, Response } from 'express';
 import cors from "cors";
 import categoryRouter from "./routes/categoryRoutes.js";
 import uploadRouter from "./routes/uploadRoutes.js";
+import storeRouter from "./routes/storeRoutes.js";
 
 const app = express();
 
@@ -24,6 +25,7 @@ app.use(express.json());
 app.use(express.urlencoded());
 
 app.use('/api/categories', categoryRouter);
+app.use('/api/stores', storeRouter);
 app.use("/api/upload",uploadRouter)
 
 app.listen(port, () => {
