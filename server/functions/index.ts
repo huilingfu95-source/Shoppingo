@@ -19,6 +19,11 @@ const json = (data: unknown, status = 200)=> new Response(JSON.stringify(data), 
         "Access-Control-Allow-Headers": "Content-Type, Authorization",
     }
 })
+// shared 403 for suspended stores (store route + both product routes)
+const storeSuspended = () => json({
+    success: false,
+    message: "This store is currently suspended by platform administration."
+}, 403)
 //这个函数返回一个 Promise，而这个 Promise 成功完成后会得到一个 Response 对象
 //fetch()：Cloudflare Worker 接收 HTTP Request 的入口。
 //fetch 里的 if 判断 method 和路径，满足某条路由，
@@ -89,12 +94,7 @@ export default {
 
                 if (!store) return json({ success: false, message: "Store not found" }, 404);
 
-                if (store.status === "suspended") {
-                    return json({
-                        success: false,
-                        message: "This store is currently suspended by platform administration."
-                    },403);
-                }
+                if (store.status === "suspended") return storeSuspended();
                 return json({success:true,store})
             }
 
@@ -119,6 +119,7 @@ export default {
                 LIMIT 1
             `
             if(!product) return json({ success: false, message:"Product not found"},404)
+            if (product.store_status === "suspended") return storeSuspended();
                 return json({success:true,product})
             }
 
@@ -130,17 +131,15 @@ export default {
             const storeSlug = searchParams.get("storeSlug");
             const storeIdParam = searchParams.get("storeId");
             const categoryIdParam = searchParams.get("categoryId");
-            const status = searchParams.get("status") || null;
             const search = searchParams.get("search")?.trim() || null;
 
             let targetStoreId = storeIdParam ? Number(storeIdParam) : null;
 
-            if (storeSlug) {
-                const [store] = await sql`
-                    SELECT id FROM stores
-                    WHERE slug = ${storeSlug}
-                    LIMIT 1
-                `;
+            // look up the store (by slug, else by id) so the suspension check covers both
+            if (storeSlug || targetStoreId) {
+                const [store] = storeSlug
+                    ? await sql`SELECT id, status FROM stores WHERE slug = ${storeSlug} LIMIT 1`
+                    : await sql`SELECT id, status FROM stores WHERE id = ${targetStoreId} LIMIT 1`;
 
                 if (!store) {
                     return json({
@@ -148,6 +147,7 @@ export default {
                         message: "Store not found"
                     }, 404);
                 }
+                if (store.status === "suspended") return storeSuspended();
 
                 targetStoreId = Number(store.id);
             }
@@ -169,7 +169,7 @@ export default {
                 FROM products p
                 LEFT JOIN categories c ON p.category_id = c.id
                 WHERE p.store_id = ${targetStoreId}
-                AND (${status}::text IS NULL OR p.status = ${status})
+                AND p.status = 'active'
                 AND (${categoryId}::int IS NULL OR p.category_id = ${categoryId})
                 AND (${search}::text IS NULL OR (              
                     p.name ILIKE '%' || ${search} || '%'
