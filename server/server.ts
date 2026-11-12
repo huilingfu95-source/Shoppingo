@@ -37,3 +37,14 @@ app.use("/api/analytics", analyticsRouter)
 app.listen(port, () => {
     console.log(`Server is running at http://localhost:${port}`);
 });
+
+// Express vs Neon Function
+// | 项目          | Express（原来）                         | Neon Function：一个云端运行环境（放代码的地方                   |
+// |---------------|-----------------------------------------|-------------------------------------------|
+// | 入口文件       | server/server.ts                        | server/functions/index.ts                 |
+// | 启动 command   | npm run server                          | neon dev                                  |
+// | 谁决定 port    | 你在代码里写 app.listen(3000)            | neon.ts 里的 dev.port: 8787               |
+// | 谁登记 routes  | app.use("/api/products", ...)           | fetch() 里的 if (path === "/products")    |
+// | 连数据库       | Prisma                                  | neon() + sql`...`                         |
+// | 部署到哪里     | 要自己找 server（Render、Railway 等）    | neon deploy 直接上传到 Neon               |
+// | 测试网址       | http://localhost:3000/api/products      | http://localhost:8787/api/products        |
