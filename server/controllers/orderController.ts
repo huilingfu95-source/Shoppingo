@@ -74,6 +74,26 @@ const matchVariant = (
     const options = Array.isArray(productVariants) ? productVariants.filter(isPlainObject) : [];
     if (options.length === 0) return requested === null ? { variant: null } : { error: "has no variants" };
     if (requested === null) return { error: "requires a variant" };
+
+    // 商家后台（ProductVariantBuilder）存的是"选项组"格式：[{ name: "Color", options: ["Red", "Blue"] }]
+    // 顾客发 { Color: "Red" }：每个组都要选，而且选的值必须在该组的 options 里
+    const isGroup = (o: Record<string, unknown>) => typeof o.name === "string" && Array.isArray(o.options);
+    if (options.every(isGroup)) {
+        const variant: Record<string, unknown> = {};
+        for (const group of options) {
+            const name = group.name as string;
+            const picked = requested[name];
+            if (picked === undefined) return { error: `requires a ${name}` };
+            if (!(group.options as unknown[]).some((opt) => canonical(opt) === canonical(picked))) {
+                return { error: "does not offer that variant" };
+            }
+            variant[name] = picked;   // 只拷贝组里定义过的 key，多余的 key 直接丢掉
+        }
+        if (Object.keys(requested).some((key) => !(key in variant))) return { error: "does not offer that variant" };
+        return { variant };
+    }
+
+    // 另一种格式："组合列表" [{ Color: "Red", Size: "M", price?: 12 }]
     const matches = options.filter((option) =>
         Object.entries(requested).every(([key, value]) => canonical(option[key]) === canonical(value)),
     );

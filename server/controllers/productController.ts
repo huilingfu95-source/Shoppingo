@@ -32,6 +32,35 @@ const isStatus = (value: unknown): value is (typeof PRODUCT_STATUSES)[number] =>
 
 const isOptionalString = (value: unknown) => value === undefined || value === null || typeof value === "string";
 
+// GET: all products of the authenticated merchant's store (every status, incl. inactive)
+// public GET /api/products (Neon Function) 只返回 active，商家后台要看到全部，所以单独走 Express
+export const getMerchantProducts = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    try {
+        const store = await getStore(req.user!.id);
+        if (!store) {
+            res.status(404).json({ success: false, message: "Store not found for the user" });
+            return;
+        }
+
+        const rows = await prisma.products.findMany({
+            where: { store_id: store.id },
+            include: { categories: { select: { name: true, slug: true } } },
+            orderBy: { created_at: "desc" },
+        });
+
+        // 和 public API 返回的形状保持一致：category_name / category_slug 拍平
+        const products = rows.map(({ categories, ...p }) => ({
+            ...p,
+            category_name: categories?.name ?? null,
+            category_slug: categories?.slug ?? null,
+        }));
+        res.json({ success: true, products });
+    } catch (error: any) {
+        console.error("getMerchantProducts error:", error);
+        res.status(500).json({ success: false, message: "Failed to load products" });
+    }
+};
+
 // POST: create a product in the authenticated merchant's store
 export const createProduct = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {

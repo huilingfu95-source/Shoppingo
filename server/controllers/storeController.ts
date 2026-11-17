@@ -265,7 +265,8 @@ export const getStoreBySlug = async (req: Request, res: Response): Promise<void>
 };
 
 // allowed storefront hero layouts
-const VALID_HEROES = ["hero1", "hero2", "hero3"];
+// 和前端 StoreHeroStyleSelector / storefront heroes/Hero1~4 保持一致
+const VALID_HEROES = ["hero1", "hero2", "hero3", "hero4"];
 
 // parse a client-supplied ID: only positive safe integers are valid, otherwise null
 const parseId = (value: unknown): number | null => {
@@ -388,7 +389,7 @@ export const updateStoreSettings = async (req: AuthenticatedRequest, res: Respon
 // revenue = 所有未取消订单的 total 之和
 export const getAllStores = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
-        const [stores, revenueRows] = await Promise.all([
+        const [stores, revenueRows, merchantRows] = await Promise.all([
             prisma.stores.findMany({
                 include: { 
                     _count: { select: { products: true, orders: true, categories: true } } },
@@ -399,14 +400,24 @@ export const getAllStores = async (req: AuthenticatedRequest, res: Response): Pr
                 where: { NOT: { order_status: "cancelled" } },
                 _sum: { total: true },
             }),
+            // merchant 的名字 / email 在 neon_auth.user（不在 schema.prisma 里），用 raw SQL
+            prisma.$queryRaw<Array<{ id: string; name: string | null; email: string }>>`
+                SELECT u.id, u.name, u.email
+                FROM neon_auth.user u
+                WHERE EXISTS (SELECT 1 FROM public.stores s WHERE s.merchant_id = u.id)
+            `,
         ]);
 
+        const merchantById = new Map(merchantRows.map((m) => [String(m.id), m]));
         const revenueByStore = new Map(
             revenueRows.map((row) => [row.store_id, Number(row._sum.total ?? 0)])
         );
 
         const result = stores.map(({ _count, ...store }) => ({
             ...store,
+            status: store.status ?? "active",
+            merchant_name: merchantById.get(String(store.merchant_id))?.name ?? null,
+            merchant_email: merchantById.get(String(store.merchant_id))?.email ?? null,
             stats: {
                 productCount: _count.products,
                 orderCount: _count.orders,
@@ -454,8 +465,8 @@ export const getAllMerchants = async (req: AuthenticatedRequest, res: Response):
     }
 };
 
-// ADMIN: toggle store status active <-> inactive
-// inactive 的店铺在 getStoreBySlug（storefront）里返回 404
+// ADMIN: toggle store status active <-> suspended
+// 全系统（Neon Function、analytics、前端 Store type）认的是 "suspended"，不能用 "inactive"
 export const toggleStoreStatus = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
         const storeId = parseId(req.params.id);
@@ -470,7 +481,8 @@ export const toggleStoreStatus = async (req: AuthenticatedRequest, res: Response
             return;
         }
 
-        const status = store.status === "active" ? "inactive" : "active";
+        // NULL = 列默认值 active
+        const status = (store.status ?? "active") === "active" ? "suspended" : "active";
         const updated = await prisma.stores.update({
             where: { id: storeId },
             data: { status },
