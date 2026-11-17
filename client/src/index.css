@@ -1,0 +1,128 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap");
+@import "tailwindcss";
+
+@theme {
+    /* 奶油粉 cream pink */
+    --color-creampink-50: #fdf6f5;
+    --color-creampink-100: #fbeceb;
+    --color-creampink-200: #f6d5d3;
+    --color-creampink-300: #efbab7;
+    --color-creampink-400: #e49b98;
+    --color-creampink-500: #d6807d;
+    /* 竹月 zhuyue gray-blue (#7f9faf) */
+    --color-zhuyue-50: #f3f6f8;
+    --color-zhuyue-100: #e4ebef;
+    --color-zhuyue-200: #c9d7de;
+    --color-zhuyue-300: #a7bdc8;
+    --color-zhuyue-400: #7f9faf;
+    --color-zhuyue-500: #67889a;
+    --color-zhuyue-600: #557385;
+    --color-zhuyue-700: #475f6e;
+    --color-zhuyue-800: #3c4f5b;
+    --color-zhuyue-900: #33424c;
+    --color-zhuyue-950: #222c33;
+    --font-inter: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+body {
+    font-family: var(--font-inter);
+    color: #0f172a;
+    background-color: #fdf8f6;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+::selection {
+    background-color: #f6d5d3;
+    color: #6e3c3b;
+}
+
+/* Minimalist scrollbars */
+::-webkit-scrollbar {
+    width: 5px;
+    height: 5px;
+}
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: #557385;
+}
+
+@keyframes marqueeUp {
+    0% {
+        transform: translateY(0);
+    }
+    100% {
+        transform: translateY(-50%);
+    }
+}
+@keyframes marqueeDown {
+    0% {
+        transform: translateY(-50%);
+    }
+    100% {
+        transform: translateY(0);
+    }
+}
+.animate-col-up {
+    animation: marqueeUp 42s linear infinite;
+}
+.animate-col-down {
+    animation: marqueeDown 42s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+    .animate-col-up,
+    .animate-col-down {
+        animation: none;
+    }
+}
+
+/* Storefront Dynamic Accent Variables Default */
+:root {
+    --store-accent: #557385;
+    --store-accent-hover: #475f6e;
+    --store-accent-light: rgba(85, 115, 133, 0.08);
+    --store-accent-medium: rgba(85, 115, 133, 0.16);
+    --store-accent-border: rgba(85, 115, 133, 0.28);
+    --store-accent-ring: rgba(85, 115, 133, 0.25);
+    --store-accent-contrast: #ffffff;
+}
+
+.store-accent-bg {
+    background-color: var(--store-accent, #557385);
+    color: var(--store-accent-contrast, #ffffff);
+}
+
+.store-accent-btn {
+    background-color: var(--store-accent, #557385) !important;
+    color: var(--store-accent-contrast, #ffffff) !important;
+    transition: all 150ms ease;
+}
+
+.store-accent-btn:hover {
+    background-color: var(--store-accent-hover, #475f6e) !important;
+}
+
+.store-accent-text {
+    color: var(--store-accent, #557385);
+}
+
+.store-accent-text-hover:hover {
+    color: var(--store-accent, #557385) !important;
+}
+
+.store-accent-border {
+    border-color: var(--store-accent, #557385);
+}
+
+.store-accent-pill {
+    background-color: var(--store-accent-contrast, rgba(85, 115, 133, 0.08));
+    border-color: var(--store-accent-border, rgba(85, 115, 133, 0.28));
+    color: var(--store-accent, #557385);
+}
